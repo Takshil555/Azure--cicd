@@ -1,34 +1,51 @@
-# Stage 1: Build stage
-FROM maven:3.9.9-eclipse-temurin-21 AS builder
+# ==========================================
+# Stage 1: Build
+# ==========================================
+FROM maven:3.9.9-eclipse-temurin-25 AS builder
 
 WORKDIR /app
 
-# Copy pom.xml and download dependencies (layer caching)
+# Copy Maven configuration
 COPY pom.xml .
-# Download dependencies offline if possible
+
+# Download dependencies
 RUN mvn dependency:go-offline -B || true
 
-# Copy source code and build package
+# Copy source code
 COPY src ./src
+
+# Build application
 RUN mvn clean package -DskipTests
 
-# Stage 2: Runtime stage
-FROM eclipse-temurin:21-jre-alpine
+
+# ==========================================
+# Stage 2: Runtime
+# ==========================================
+FROM eclipse-temurin:25-jre-alpine
 
 WORKDIR /app
 
-# Create non-root user for security best practices
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+# Create non-root user
+RUN addgroup -S appgroup && \
+    adduser -S appuser -G appgroup
 
-# Copy compiled jar from builder stage
+# Copy JAR from build stage
 COPY --from=builder /app/target/*.jar app.jar
 
 # Set ownership
 RUN chown -R appuser:appgroup /app
 
+# Run as non-root user
 USER appuser
 
+# Application port
 EXPOSE 8091
 
-# JVM flags for container awareness and performance
-ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-XX:MaxRAMPercentage=75.0", "-jar", "app.jar"]
+# Start application
+ENTRYPOINT [
+    "java",
+    "-XX:+UseContainerSupport",
+    "-XX:MaxRAMPercentage=75.0",
+    "-jar",
+    "app.jar"
+]
