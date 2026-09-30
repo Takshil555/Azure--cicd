@@ -1,5 +1,5 @@
 # Stage 1: Build stage
-FROM maven:3.9.9-eclipse-temurin-25 AS builder
+FROM maven:3.9-eclipse-temurin-25 AS builder
 
 WORKDIR /app
 
@@ -13,16 +13,15 @@ RUN mvn clean package -DskipTests
 
 
 # Stage 2: Runtime stage
-FROM eclipse-temurin:25-jre-alpine
+FROM eclipse-temurin:25-jre
 
 WORKDIR /app
 
-RUN addgroup -S appgroup && \
-    adduser -S appuser -G appgroup
+RUN useradd -m appuser
 
 COPY --from=builder /app/target/*.jar app.jar
 
-RUN chown -R appuser:appgroup /app
+RUN chown -R appuser:appuser /app
 
 USER appuser
 
