@@ -31,7 +31,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ secrets.AZURE_ACR_NAME }}.azurecr.io/${{ secrets.AZURE_REPO_NAME }}:prod
+          tags: ${{ secrets.AZURE_ACR_NAME }}.azurecr.io/api-gateway:prod
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -43,84 +43,70 @@ jobs:
     steps:
       - name: SSH into Azure VM and Deploy
         uses: appleboy/ssh-action@v1.2.0
-        env:
-          AZURE_ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
-          AZURE_ACR_USERNAME: ${{ secrets.AZURE_ACR_USERNAME }}
-          AZURE_ACR_PASSWORD: ${{ secrets.AZURE_ACR_PASSWORD }}
-          AZURE_REPO_NAME: ${{ secrets.AZURE_REPO_NAME }}
-          AZURE_VM_USERNAME: ${{ secrets.AZURE_VM_USERNAME }}
         with:
           host: ${{ secrets.AZURE_VM_HOST }}
           username: ${{ secrets.AZURE_VM_USERNAME }}
           key: ${{ secrets.AZURE_SSH_KEY }}
-          envs: AZURE_ACR_NAME,AZURE_ACR_USERNAME,AZURE_ACR_PASSWORD,AZURE_REPO_NAME,AZURE_VM_USERNAME
-          script_stop: true
           script: |
-            set -e
-
-            echo "=== Step 1: Checking and Installing Docker & Docker Compose ==="
+            bash -c '
+            echo "=== Step 1: Installing Docker if missing ==="
             if ! command -v docker >/dev/null 2>&1 || ! sudo docker compose version >/dev/null 2>&1; then
-              echo "Installing Docker and Docker Compose via official Docker script..."
               curl -fsSL https://get.docker.com | sudo sh
-              sudo usermod -aG docker $USER || true
+              sudo usermod -aG docker "$USER" 2>/dev/null || true
               sudo systemctl enable docker
               sudo systemctl start docker
-              echo "Docker and Docker Compose installed successfully."
-            else
-              echo "Docker and Docker Compose are already installed and ready."
             fi
 
-            echo "=== Step 2: Setting up Deployment Directory ==="
+            echo "=== Step 2: Preparing Application Directory ==="
             APP_DIR="$HOME/api-gateway"
             mkdir -p "$APP_DIR"
             cd "$APP_DIR"
 
-            ACR_REGISTRY="${AZURE_ACR_NAME}.azurecr.io"
-            IMAGE_TAG="${ACR_REGISTRY}/${AZURE_REPO_NAME:-api-gateway}:prod"
-
             echo "=== Step 3: Writing docker-compose.yml ==="
-            sudo tee docker-compose.yml > /dev/null <<EOF
-services:
-  api-gateway:
-    image: ${IMAGE_TAG}
-    container_name: api-gateway
-    restart: unless-stopped
-    ports:
-      - "8091:8091"
-    environment:
-      - SPRING_PROFILES_ACTIVE=prod
-      - SERVER_PORT=8091
-      - JAVA_OPTS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0
-    healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8091/actuator/health || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 40s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "5"
-EOF
+            cat <<EOF > docker-compose.yml
+            services:
+              api-gateway:
+                image: ${{ secrets.AZURE_ACR_NAME }}.azurecr.io/api-gateway:prod
+                container_name: api-gateway
+                restart: unless-stopped
+                ports:
+                  - "8091:8091"
+                environment:
+                  - SPRING_PROFILES_ACTIVE=prod
+                  - SERVER_PORT=8091
+                  - JAVA_OPTS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0
+                healthcheck:
+                  test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8091/actuator/health || exit 1"]
+                  interval: 30s
+                  timeout: 5s
+                  retries: 3
+                  start_period: 40s
+                logging:
+                  driver: "json-file"
+                  options:
+                    max-size: "10m"
+                    max-file: "5"
+            EOF
 
-            echo "=== Step 4: Authenticating to Azure Container Registry ==="
-            ACR_USER="${AZURE_ACR_USERNAME:-$AZURE_ACR_NAME}"
-            echo "$AZURE_ACR_PASSWORD" | sudo docker login "$ACR_REGISTRY" -u "$ACR_USER" --password-stdin
+            sed -i "s/^[ \t]*//" docker-compose.yml
 
-            echo "=== Step 5: Pulling Latest Docker Image ==="
+            echo "=== Step 4: Login to ACR from VM ==="
+            echo "${{ secrets.AZURE_ACR_PASSWORD }}" | sudo docker login "${{ secrets.AZURE_ACR_NAME }}.azurecr.io" -u "${{ secrets.AZURE_ACR_NAME }}" --password-stdin
+
+            echo "=== Step 5: Pulling Latest Image ==="
             sudo docker compose pull
 
-            echo "=== Step 6: Deploying Application ==="
+            echo "=== Step 6: Starting Container ==="
             sudo docker compose up -d --remove-orphans --force-recreate
 
-            echo "=== Step 7: Cleaning up Old Images ==="
+            echo "=== Step 7: Pruning Old Images ==="
             sudo docker image prune -af
 
-            echo "=== Step 8: Deployment Status & Initial Logs ==="
+            echo "=== Step 8: Checking Status ==="
             sudo docker compose ps
-            echo "Waiting 5 seconds for application startup..."
-            sleep 5
-            sudo docker compose logs --tail=40
-            echo "Deployment completed successfully!"
+            echo "Recent container logs:"
+            sleep 4
+            sudo docker compose logs --tail=30
+            echo "Deployment finished successfully!"
+            '
 
