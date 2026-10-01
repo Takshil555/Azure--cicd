@@ -56,49 +56,33 @@ jobs:
           envs: AZURE_ACR_NAME,AZURE_ACR_USERNAME,AZURE_ACR_PASSWORD,AZURE_REPO_NAME,AZURE_VM_USERNAME
           script_stop: true
           script: |
-            export DEBIAN_FRONTEND=noninteractive
             set -e
 
-            echo "=== Step 1: Checking Docker & Docker Compose Installation ==="
-            if ! command -v docker > /dev/null 2>&1; then
-              echo "Docker is not installed. Installing Docker on Ubuntu 24.04 LTS..."
-              sudo apt-get update -y
-              sudo apt-get install -y ca-certificates curl gnupg
-              sudo install -m 0755 -d /etc/apt/keyrings
-              curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
-              sudo chmod a+r /etc/apt/keyrings/docker.gpg
-              UBUNTU_CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME")
-              echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME} stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-              sudo apt-get update -y
-              sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-              sudo usermod -aG docker "${AZURE_VM_USERNAME}" || true
+            echo "=== Step 1: Checking and Installing Docker & Docker Compose ==="
+            if ! command -v docker >/dev/null 2>&1 || ! sudo docker compose version >/dev/null 2>&1; then
+              echo "Installing Docker and Docker Compose via official Docker script..."
+              curl -fsSL https://get.docker.com | sudo sh
+              sudo usermod -aG docker $USER || true
               sudo systemctl enable docker
               sudo systemctl start docker
-              echo "Docker installed successfully."
+              echo "Docker and Docker Compose installed successfully."
             else
-              echo "Docker is already installed."
-            fi
-
-            if ! docker compose version > /dev/null 2>&1; then
-              echo "Docker Compose plugin missing. Installing..."
-              sudo apt-get update -y
-              sudo apt-get install -y docker-compose-plugin
-              echo "Docker Compose installed successfully."
-            else
-              echo "Docker Compose is already available."
+              echo "Docker and Docker Compose are already installed and ready."
             fi
 
             echo "=== Step 2: Setting up Deployment Directory ==="
-            APP_DIR="/home/${AZURE_VM_USERNAME}/api-gateway"
-            sudo mkdir -p "$APP_DIR"
-            sudo chown -R "${AZURE_VM_USERNAME}:${AZURE_VM_USERNAME}" "$APP_DIR"
+            APP_DIR="$HOME/api-gateway"
+            mkdir -p "$APP_DIR"
             cd "$APP_DIR"
 
-            echo "=== Step 3: Generating/Updating docker-compose.yml ==="
-            cat << 'EOF' > docker-compose.yml
+            ACR_REGISTRY="${AZURE_ACR_NAME}.azurecr.io"
+            IMAGE_TAG="${ACR_REGISTRY}/${AZURE_REPO_NAME:-api-gateway}:prod"
+
+            echo "=== Step 3: Writing docker-compose.yml ==="
+            sudo tee docker-compose.yml > /dev/null <<EOF
 services:
   api-gateway:
-    image: IMAGE_PLACEHOLDER
+    image: ${IMAGE_TAG}
     container_name: api-gateway
     restart: unless-stopped
     ports:
@@ -120,25 +104,23 @@ services:
         max-file: "5"
 EOF
 
-            sed -i "s|IMAGE_PLACEHOLDER|${AZURE_ACR_NAME}.azurecr.io/${AZURE_REPO_NAME}:prod|g" docker-compose.yml
-
             echo "=== Step 4: Authenticating to Azure Container Registry ==="
-            LOGIN_USER="${AZURE_ACR_USERNAME:-$AZURE_ACR_NAME}"
-            echo "$AZURE_ACR_PASSWORD" | sudo docker login "${AZURE_ACR_NAME}.azurecr.io" -u "$LOGIN_USER" --password-stdin
+            ACR_USER="${AZURE_ACR_USERNAME:-$AZURE_ACR_NAME}"
+            echo "$AZURE_ACR_PASSWORD" | sudo docker login "$ACR_REGISTRY" -u "$ACR_USER" --password-stdin
 
             echo "=== Step 5: Pulling Latest Docker Image ==="
             sudo docker compose pull
 
-            echo "=== Step 6: Deploying / Updating Application ==="
+            echo "=== Step 6: Deploying Application ==="
             sudo docker compose up -d --remove-orphans --force-recreate
 
-            echo "=== Step 7: Cleaning up Unused Docker Images ==="
+            echo "=== Step 7: Cleaning up Old Images ==="
             sudo docker image prune -af
 
-            echo "=== Step 8: Deployment Status & Container Logs ==="
+            echo "=== Step 8: Deployment Status & Initial Logs ==="
             sudo docker compose ps
-            echo "Waiting 5 seconds for initialization..."
+            echo "Waiting 5 seconds for application startup..."
             sleep 5
-            sudo docker compose logs --tail=50
+            sudo docker compose logs --tail=40
             echo "Deployment completed successfully!"
 
