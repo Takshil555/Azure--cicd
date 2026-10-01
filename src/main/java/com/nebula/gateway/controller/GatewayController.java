@@ -21,7 +21,7 @@ public class GatewayController {
 
     @GetMapping("/testApiPub")
     public String testGatewayPub() {
-        return "I am public URL of Gateway!!";
+        return "I am public URL of takshil!!";
     }
 
 }
