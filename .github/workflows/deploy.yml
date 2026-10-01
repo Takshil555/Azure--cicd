@@ -141,3 +141,4 @@ EOF
             sleep 5
             sudo docker compose logs --tail=50
             echo "Deployment completed successfully!"
+
