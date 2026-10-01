@@ -1,8 +1,11 @@
 **/.git
 **/.gitignore
+**/.github
 **/target
 **/.idea
 **/.vscode
 **/*.iml
 **/README.md
 **/.DS_Store
+**/Dockerfile
+**/docker-compose.yml
